@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Never Wait for Completeness</title>
+<meta name="description" content="A review of Akidau et al., “The Dataflow Model” (PVLDB 2015): what it says, how it aged, and what it taught us while building a real-time wildfire smoke alert pipeline.">
+<meta name="author" content="Vraj Patel">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Never Wait for Completeness: what Google’s Dataflow Model taught us about real-time smoke alerts">
+<meta property="og:description" content="A review of Akidau et al., “The Dataflow Model” (PVLDB 2015), from four angles: peer reviewer, industry, code and authors.">
+<meta property="og:image" content="https://vraj8.github.io/dataflow-model-blog/dataflow_lineage.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #fcfcfb;
+  --surface: #f3f2ef;
+  --card: #ffffff;
+  --ink: #16150f;
+  --ink-2: #52514e;
+  --ink-3: #8a8983;
+  --rule: #e2e0da;
+  --accent: #2a78d6;
+  --accent-soft: #e6f0fb;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --band: #f1f0ec;
+  --code-bg: #f4f3ef;
+  --grid: #e8e6e0;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #141413;
+    --surface: #1d1d1b;
+    --card: #1a1a19;
+    --ink: #f0efec;
+    --ink-2: #c3c2b7;
+    --ink-3: #8f8e86;
+    --rule: #33322e;
+    --accent: #6aa5ee;
+    --accent-soft: #1c2a3b;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --band: #22221f;
+    --code-bg: #1f1f1d;
+    --grid: #2c2b28;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #141413; --surface: #1d1d1b; --card: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #8f8e86;
+  --rule: #33322e; --accent: #6aa5ee; --accent-soft: #1c2a3b; --series-1: #3987e5; --series-2: #d95926;
+  --band: #22221f; --code-bg: #1f1f1d; --grid: #2c2b28;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 400 19px/1.7 "Source Serif 4", Georgia, serif;
+  font-optical-sizing: auto;
+}
+.wrap { max-width: 720px; margin: 0 auto; padding: 0 16px; }
+.wide { max-width: 880px; margin-left: auto; margin-right: auto; }
+header.top {
+  border-bottom: 1px solid var(--rule);
+  font: 500 14px/1 Inter, system-ui, sans-serif; color: var(--ink-2);
+}
+header.top .wrap { display: flex; justify-content: space-between; align-items: center; height: 56px; }
+header.top a { color: inherit; text-decoration: none; }
+.kicker { font: 600 13px/1.4 Inter, system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 56px 0 12px; }
+h1 { font: 700 clamp(32px, 6vw, 46px)/1.12 Inter, system-ui, sans-serif; letter-spacing: -0.02em; margin: 0 0 18px; text-wrap: balance; }
+.dek { font-size: 22px; line-height: 1.5; color: var(--ink-2); margin: 0 0 28px; }
+.byline { display: flex; flex-wrap: wrap; gap: 6px 18px; font: 400 15px/1.5 Inter, system-ui, sans-serif; color: var(--ink-2); padding: 16px 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+.byline strong { color: var(--ink); font-weight: 600; }
+h2 { font: 700 27px/1.25 Inter, system-ui, sans-serif; letter-spacing: -0.01em; margin: 64px 0 16px; scroll-margin-top: 16px; }
+h3 { font: 600 19px/1.35 Inter, system-ui, sans-serif; margin: 32px 0 8px; }
+p { margin: 0 0 20px; }
+a { color: var(--accent); text-underline-offset: 2px; }
+ul, ol { padding-left: 24px; margin: 0 0 20px; }
+li { margin-bottom: 8px; }
+strong { font-weight: 600; }
+code { font: 400 0.84em/1 "JetBrains Mono", ui-monospace, monospace; background: var(--code-bg); padding: 2px 5px; border-radius: 4px; }
+pre { background: var(--code-bg); border: 1px solid var(--rule); border-radius: 8px; padding: 16px 18px; overflow-x: auto; margin: 0 0 24px; }
+pre code { background: none; padding: 0; font-size: 14px; line-height: 1.6; }
+pre .c { color: var(--ink-3); }
+
+.paper-card {
+  margin: 36px 0 8px; padding: 22px 24px; background: var(--accent-soft);
+  border-left: 4px solid var(--accent); border-radius: 0 8px 8px 0;
+  font: 400 16px/1.6 Inter, system-ui, sans-serif;
+}
+.paper-card .label { font-weight: 600; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+.paper-card p { margin: 0 0 10px; }
+.paper-card p:last-child { margin: 0; }
+.paper-card .title { font-weight: 600; font-size: 17px; color: var(--ink); }
+.note { font: 400 14px/1.6 Inter, system-ui, sans-serif; color: var(--ink-2); }
+
+.tldr { margin: 28px 0 0; padding: 20px 24px; border: 1px solid var(--rule); border-radius: 8px; background: var(--card); }
+.tldr h4 { margin: 0 0 8px; font: 600 13px/1.4 Inter, system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+.tldr ul { margin: 0; font-size: 17px; }
+
+nav.toc { margin: 36px 0 0; font: 400 15px/1.5 Inter, system-ui, sans-serif; }
+nav.toc h4 { margin: 0 0 8px; font: 600 13px/1.4 Inter, system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+nav.toc ol { columns: 2; column-gap: 32px; margin: 0; padding-left: 20px; }
+nav.toc li { margin-bottom: 4px; break-inside: avoid; }
+nav.toc a { color: var(--ink); text-decoration: none; }
+nav.toc a:hover { color: var(--accent); }
+@media (max-width: 560px) { nav.toc ol { columns: 1; } }
+
+.table-wrap { overflow-x: auto; margin: 0 0 28px; }
+table { width: 100%; border-collapse: collapse; font: 400 15px/1.5 Inter, system-ui, sans-serif; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-weight: 600; color: var(--ink-2); font-size: 13px; letter-spacing: .02em; border-bottom: 1.5px solid var(--ink-3); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+caption { caption-side: bottom; text-align: left; padding-top: 8px; font-size: 13px; color: var(--ink-3); }
+
+figure { margin: 8px 0 36px; }
+figure .frame { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 18px 18px 10px; position: relative; }
+figure img { width: 100%; height: auto; display: block; border-radius: 6px; background: #fff; }
+figcaption { font: 400 14px/1.55 Inter, system-ui, sans-serif; color: var(--ink-2); margin-top: 10px; }
+figcaption b { color: var(--ink); font-weight: 600; }
+.chart-title { font: 600 15px/1.4 Inter, system-ui, sans-serif; margin: 0 0 2px; }
+.chart-sub { font: 400 13px/1.4 Inter, system-ui, sans-serif; color: var(--ink-2); margin: 0 0 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font: 400 13px/1.4 Inter, system-ui, sans-serif; color: var(--ink-2); margin: 0 0 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.sw.line { width: 16px; height: 2px; border-radius: 1px; }
+svg text { font-family: Inter, system-ui, sans-serif; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+@media (max-width: 640px) { .pair { grid-template-columns: 1fr; } }
+.tip {
+  position: absolute; pointer-events: none; opacity: 0; transition: opacity .12s;
+  background: var(--ink); color: var(--bg); font: 500 13px/1.45 Inter, system-ui, sans-serif;
+  padding: 7px 10px; border-radius: 6px; white-space: nowrap; z-index: 5;
+}
+
+.verdict { display: inline-block; font: 600 13px/1 Inter, system-ui, sans-serif; letter-spacing: .04em; text-transform: uppercase; padding: 7px 10px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); margin: 0 0 16px; }
+.score { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dots { letter-spacing: 2px; color: var(--accent); }
+.dots .off { color: var(--rule); }
+
+blockquote { margin: 0 0 24px; padding: 4px 0 4px 20px; border-left: 3px solid var(--rule); color: var(--ink-2); font-style: italic; }
+
+.memo { border: 1px solid var(--rule); border-radius: 8px; padding: 20px 24px; margin: 0 0 24px; background: var(--card); font: 400 16px/1.6 Inter, system-ui, sans-serif; }
+.memo .hdr { font-size: 13px; color: var(--ink-2); border-bottom: 1px dashed var(--rule); padding-bottom: 10px; margin-bottom: 12px; }
+.memo ul { margin: 0; }
+
+ol.refs { font: 400 15px/1.6 Inter, system-ui, sans-serif; padding-left: 22px; }
+ol.refs li { margin-bottom: 10px; }
+
+footer { margin-top: 72px; border-top: 1px solid var(--rule); padding: 28px 0 56px; font: 400 14px/1.6 Inter, system-ui, sans-serif; color: var(--ink-2); }
+.theme-btn { background: none; border: 1px solid var(--rule); color: var(--ink-2); border-radius: 6px; padding: 6px 10px; font: 500 13px/1 Inter, system-ui, sans-serif; cursor: pointer; }
+.theme-btn:hover { color: var(--ink); }
+@media (max-width: 560px) {
+  body { font-size: 18px; }
+  .dek { font-size: 19px; }
+  h2 { font-size: 24px; margin-top: 52px; }
+  .paper-card, .tldr, .memo { padding: 18px; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <span>DATA 226 · Significant Paper Blog</span>
+    <button class="theme-btn" id="themeBtn" type="button" aria-label="Toggle dark mode">Dark mode</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <article>
+    <div class="kicker">Paper review · Stream processing</div>
+    <h1>Never Wait for Completeness: What Google’s Dataflow Model Taught Us About Real-Time Smoke Alerts</h1>
+    <p class="dek">A review of a 2015 VLDB paper that changed how the industry thinks about late data, read through the lens of a wildfire-smoke pipeline we built this semester.</p>
+
+    <div class="byline">
+      <span>By <strong>Vraj Patel</strong></span>
+      <span>DATA 226, Big Data and Warehousing · San José State University</span>
+      <span>November 2026 · 14 min read</span>
+    </div>
+
+    <div class="paper-card" role="note" aria-label="Paper being discussed">
+      <div class="label">The paper this post discusses</div>
+      <p>This post summarizes and critiques the following paper. All ideas from the paper belong to its authors; the opinions, figures and experiments here are our own.</p>
+      <p class="title">The Dataflow Model: A Practical Approach to Balancing Correctness, Latency, and Cost in Massive-Scale, Unbounded, Out-of-Order Data Processing</p>
+      <p>Tyler Akidau, Robert Bradshaw, Craig Chambers, Slava Chernyak, Rafael J. Fernández-Moctezuma, Reuven Lax, Sam McVeety, Daniel Mills, Frances Perry, Eric Schmidt, Sam Whittle (Google).</p>
+      <p><em>Proceedings of the VLDB Endowment</em>, Vol. 8, No. 12, pp. 1792–1803, 2015. DOI: <a href="https://doi.org/10.14778/2824032.2824076">10.14778/2824032.2824076</a> · <a href="https://www.vldb.org/pvldb/vol8/p1792-Akidau.pdf">Free PDF from VLDB</a></p>
+      <p class="note">We also draw on the authors’ own follow-up: T. Akidau, R. J. Fernández-Moctezuma, R. Lax, D. Mills, “The Dataflow Model Revisited,” PVLDB 19(12): 4953–4964, 2026 (<a href="https://doi.org/10.14778/3827998.3838710">DOI</a>).</p>
+    </div>
+
+    <div class="tldr">
+      <h4>In short</h4>
+      <ul>
+        <li>The paper says a pipeline over endless, out-of-order data should never wait for the data to be “complete”. Instead, it should let engineers choose how much correctness to trade for speed and cost.</li>
+        <li>It splits every pipeline into four questions (what, where, when, how), so one program runs unchanged on batch or streaming engines.</li>
+        <li>Our verdict: accept as a reviewer, fund as an investor, but skip its complex trigger language. Its own authors now say the same.</li>
+        <li>Our smoke-alert project measured the trade-off the paper only describes. Waiting 15 more minutes for late data cost 20 minutes of warning and recovered 0.07% of readings.</li>
+      </ul>
+    </div>
+
+    <nav class="toc" aria-label="Contents">
+      <h4>Contents</h4>
+      <ol>
+        <li><a href="#why">Why we picked it</a></li>
+        <li><a href="#problem">The problem in 2015</a></li>
+        <li><a href="#idea">The big idea: four questions</a></li>
+        <li><a href="#retro">The authors graded themselves</a></li>
+        <li><a href="#review">(a) As peer reviewers</a></li>
+        <li><a href="#industry">(b) Industry and patent board</a></li>
+        <li><a href="#code">(c) The code</a></li>
+        <li><a href="#authors">(d) The authors</a></li>
+        <li><a href="#project">How it shaped our project</a></li>
+        <li><a href="#learned">What we learned</a></li>
+        <li><a href="#extend">How the work could be extended</a></li>
+        <li><a href="#refs">References</a></li>
+      </ol>
+    </nav>
+
+    <p style="margin-top:40px">Every real-time pipeline has to decide how long to wait for late data. In 2015 a team at Google argued the answer is: never wait for the data to be complete. Give engineers controls to trade correctness against latency and cost instead. We read that paper for our DATA 226 significant-paper presentation, and it turned out to describe the exact trade-off our own course project measures.</p>
+
+    <h2 id="why">Why we picked it</h2>
+    <p>We wanted a paper from a top venue that our project actually builds on. This one has just won VLDB’s 2026 Test of Time Award, which goes to the VLDB paper from 10 to 12 years earlier with the most lasting impact, especially in real products.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Evidence</th><th>What we found</th></tr></thead>
+      <tbody>
+        <tr><td>Venue</td><td><em>Proceedings of the VLDB Endowment</em> (PVLDB), presented at VLDB 2015</td></tr>
+        <tr><td>Venue rank</td><td>VLDB is A* in <a href="https://portal.core.edu.au/conf-ranks/?search=VLDB&amp;by=all&amp;source=CORE2023">CORE 2023</a>, the top tier (7.65% of 784 venues)</td></tr>
+        <tr><td>Field ranking</td><td>#6 in <a href="https://scholar.google.com/citations?view_op=top_venues&amp;hl=en&amp;vq=eng_databasesinformationsystems">Google Scholar Metrics</a>, Databases &amp; Information Systems (h5-index 90)</td></tr>
+        <tr><td>Citations</td><td>853 on <a href="https://www.semanticscholar.org/paper/fa63c3f53413ced7946623889c416e34a28676ea">Semantic Scholar</a>, 80 marked highly influential</td></tr>
+        <tr><td>Recognition</td><td><a href="https://vldb.org/awards_10year.html">VLDB Test of Time Award, 2026</a></td></tr>
+      </tbody>
+    </table></div>
+    <p>It also fits the course. Event time, windowing and watermarks are the core of streaming, and the paper’s ideas now live inside warehouse features we use in class, like Snowflake’s Dynamic Tables.</p>
+
+    <h2 id="problem">The problem in 2015</h2>
+    <p>Data from web logs, phones and sensors never ends, and it arrives out of order. A phone can go offline for an hour and then upload events that happened long ago. The paper’s running example is a video provider that bills advertisers per viewing session, so the answer has to be both fast and correct.</p>
+    <p>In 2015 there was no good way to get both:</p>
+    <ul>
+      <li><strong>Batch systems</strong> (MapReduce, Spark) waited until all the data was collected, so results were slow.</li>
+      <li><strong>Streaming systems</strong> of the time (Storm, the first Spark Streaming) were fast but often lacked exactly-once results or windows based on when events actually happened.</li>
+      <li><strong>The Lambda Architecture</strong> ran a batch system and a streaming system side by side, so teams had to build two pipelines and keep them in agreement.</li>
+    </ul>
+    <p>The authors’ diagnosis was that every one of these designs assumes the input will eventually be complete. For unbounded data that day never comes, so they proposed a model built on the opposite assumption.</p>
+
+    <h2 id="idea">The big idea: four questions</h2>
+    <p>The paper splits every pipeline into four separate questions. Because of that split, one pipeline can run on a batch, micro-batch or streaming engine without changing its meaning.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Question</th><th>The paper’s answer</th><th>How our project answers it</th></tr></thead>
+      <tbody>
+        <tr><td><strong>What</strong> results are computed?</td><td>Transforms: ParDo per element, GroupByKey and Combine to aggregate</td><td>Corrected PM2.5 and AQI per H3 hexagon</td></tr>
+        <tr><td><strong>Where</strong> in event time?</td><td>Windows: fixed, sliding or session, assigned by each record’s own timestamp</td><td>10, 30 or 60-minute tumbling windows</td></tr>
+        <tr><td><strong>When</strong> in processing time?</td><td>Triggers, usually driven by the watermark</td><td>Emit when the watermark passes the window end</td></tr>
+        <tr><td><strong>How</strong> do later results relate to earlier ones?</td><td>Discarding, accumulating, or accumulating and retracting</td><td>Append mode: one final answer per window</td></tr>
+      </tbody>
+    </table></div>
+    <p>Two ideas carry the rest of the paper.</p>
+    <p><strong>Event time is not processing time.</strong> Event time is when something happened; processing time is when the pipeline saw it. The gap between them changes all the time, so windows are defined in event time.</p>
+    <p><strong>The watermark is only a guess.</strong> A watermark is the system’s estimate that it has seen everything up to some event time. If it moves too fast, data arrives behind it and is late. If it moves too slowly, one slow source holds back every result. So the paper adds triggers that can fire early, at the watermark, and again for late data.</p>
+    <p>The paper explains all of this with one example: ten readings that sum to 51. We redrew it below from the paper’s Figure 5, with the times read off by eye.</p>
+
+    <figure class="wide">
+      <div class="frame" id="fig1">
+        <p class="chart-title">The paper’s ten readings, in event time and processing time</p>
+        <p class="chart-sub">Each dot is one reading. Grey bands are 2-minute event-time windows, with each window’s true sum on top.</p>
+        <div class="legend" aria-hidden="true">
+          <span><i class="sw" style="background:var(--series-1)"></i>On time</span>
+          <span><i class="sw" style="background:var(--series-2)"></i>Late (behind the watermark)</span>
+          <span><i class="sw line" style="background:var(--ink)"></i>Watermark</span>
+        </div>
+        <svg id="scatter" role="img" aria-label="Scatter plot of ten readings. Two readings, values 8 and 9, arrive after the watermark has passed their windows." viewBox="0 0 800 400" width="100%"></svg>
+        <div class="tip" id="tip1"></div>
+      </div>
+      <figcaption><b>Figure 1.</b> Our redrawing of the paper’s running example. The watermark (black step line) is the pipeline’s guess of how far event time is complete. The readings of 8 and 9 show up after the watermark has passed their windows. A pipeline that drops late data loses them; the paper’s default re-fires those windows with corrected sums.</figcaption>
+    </figure>
+
+    <p>A batch engine returns the right sums (14, 22, 3 and 12 per two-minute window), but only at the end. A streaming engine with a watermark returns one answer per window as soon as the watermark passes it. Then the late readings arrive and the first two windows fire again with corrected values. The code is the same each time; only the trigger and engine change.</p>
+
+    <h2 id="retro">Eleven years later, the authors graded themselves</h2>
+    <p>The 2026 retrospective’s verdict fits in one line: “we got the physics right, but the interface wrong.” It is unusually honest, and it gave our critique something solid to stand on.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th style="width:22%"></th><th>What the authors say</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Got right</strong></td><td>Event time versus processing time is now standard vocabulary. Correct results became non-negotiable: exactly-once became table stakes and the Lambda Architecture was retired. Never waiting for completeness held up.</td></tr>
+        <tr><td><strong>Got wrong</strong></td><td>The trigger language was over-engineered; in production almost everyone used two triggers, fire at the watermark or fire every few minutes. Windows were used as a crutch for consistency. The latency “dial” was oversold, and ordering was never specified.</td></tr>
+        <tr><td><strong>Missed</strong></td><td>Streams and tables are the same object seen two ways. For analytics, the real answer was SQL plus incrementally maintained materialized views with a declared freshness target, such as Snowflake’s <code>TARGET_LAG</code>.</td></tr>
+      </tbody>
+    </table></div>
+    <p>One detail stood out for our project. The authors say alerts are the textbook case where a watermark is still needed, because a correction can update a number but cannot take back an alert that already went out.</p>
+
+    <h2 id="review">(a) As peer reviewers: accept, with a minor revision</h2>
+    <span class="verdict">Verdict: accept, minor revision</span>
+    <p>If this paper landed on our desk as reviewers, we would accept it. Its ideas are clear, grounded in real systems and widely reusable. We would ask for an evaluation section before publication.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Criterion</th><th>Our score</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Novelty</td><td class="score"><span class="dots">●●●●<span class="off">●</span></span> 4/5</td><td>Watermarks and windows existed before (MillWheel, punctuations), but unifying batch and streaming under four questions was new.</td></tr>
+        <tr><td>Clarity</td><td class="score"><span class="dots">●●●●●</span> 5/5</td><td>One ten-reading example explains every concept, which is rare in a systems paper.</td></tr>
+        <tr><td>Practical relevance</td><td class="score"><span class="dots">●●●●●</span> 5/5</td><td>Every feature is motivated by a real Google pipeline: billing, user sessions, abuse and anomaly detection.</td></tr>
+        <tr><td>Evaluation</td><td class="score"><span class="dots">●●<span class="off">●●●</span></span> 2/5</td><td>No throughput, latency or cost numbers; implementation details are skipped “for brevity”.</td></tr>
+        <tr><td>Reproducibility</td><td class="score"><span class="dots">●●●<span class="off">●●</span></span> 3/5</td><td>The open-source SDK came later (Apache Beam, 2016); the paper alone is not enough to rebuild the system.</td></tr>
+      </tbody>
+    </table></div>
+    <h3>Strengths</h3>
+    <ul>
+      <li>The what / where / when / how split is clean, and Flink, Spark Structured Streaming and Kafka Streams all adopted parts of it.</li>
+      <li>Batch becomes a special case of streaming, so choosing an engine no longer changes whether the answer is correct.</li>
+      <li>The paper is honest about trade-offs: it never claims you can have full correctness, low latency and low cost at once.</li>
+    </ul>
+    <h3>Weaknesses and requests to the authors</h3>
+    <ul>
+      <li>Add a quantitative evaluation: throughput, latency and cost on at least one real pipeline.</li>
+      <li>Specify how the watermark is computed and passed between stages. It is only described as a heuristic here; this was formalized later in a <a href="https://doi.org/10.14778/3476311.3476389">2021 PVLDB paper</a>.</li>
+      <li>Justify the complexity of the trigger language with user evidence, which the authors now concede was missing.</li>
+      <li>Measure the cost of keeping state around for late data and retractions.</li>
+    </ul>
+    <p><strong>Evidence from our own project.</strong> Because the model leaves the exact watermark rules open, engines differ in the details. We found that Spark (3.4 and later) drops late rows using the previous micro-batch’s watermark, not the current one. Our first simulator used the current one, and only an automated test against the real engine caught the mismatch. A precise specification in the paper would have prevented this kind of drift.</p>
+
+    <h2 id="industry">(b) Industry view: fund it</h2>
+    <p>The idea is commercially proven. It became Google Cloud Dataflow, a paid managed service, and Apache Beam, its open SDK. Apache Flink built directly on the model, and Spark Structured Streaming and Kafka Streams adopted watermarks in simpler form.</p>
+    <p>The strongest sign is that the freshness idea now ships in every major data platform under a different name:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Year</th><th>Product</th><th>Freshness setting</th></tr></thead>
+      <tbody>
+        <tr><td>2021</td><td>Delta Live Tables</td><td>refresh triggers</td></tr>
+        <tr><td>2022</td><td>BigQuery materialized views</td><td><code>max_staleness</code></td></tr>
+        <tr><td>2023</td><td>Snowflake Dynamic Tables</td><td><code>TARGET_LAG</code></td></tr>
+        <tr><td>2024</td><td>Apache Flink materialized tables</td><td><code>FRESHNESS</code></td></tr>
+      </tbody>
+    </table></div>
+    <p>If we sat on a company’s internal patent review board in 2015, this is the memo we would write:</p>
+    <div class="memo">
+      <div class="hdr"><strong>To:</strong> Patent and investment review board · <strong>Re:</strong> Unified batch and streaming model · <strong>Recommendation:</strong> Fund</div>
+      <ul>
+        <li><strong>Fund the platform.</strong> One pipeline instead of the Lambda Architecture’s two cuts both engineering and compute cost.</li>
+        <li><strong>Protect it through the service, not patents.</strong> Publishing the model openly and releasing an open SDK makes our own runner the reference implementation. The value comes from adoption, and a patent would slow adoption down.</li>
+        <li><strong>Risks.</strong> Free runners such as Flink and Spark will commoditize the engine, and most analytics customers are happy with minutes of freshness, not milliseconds.</li>
+        <li><strong>Do not fund</strong> more work on the trigger language. Put that money into declarative SQL with freshness targets, which is where users went.</li>
+      </ul>
+    </div>
+
+    <h2 id="code">(c) The code: Apache Beam, and our own replay</h2>
+    <p>The authors did release code. The Dataflow SDK became <a href="https://github.com/apache/beam">Apache Beam</a>: Apache-2.0, about 8.7k GitHub stars and 4.8k forks, with Java, Python and Go SDKs and runners for Dataflow, Flink and Spark. In Beam’s Python SDK, the paper’s four questions map almost one-to-one onto a few lines:</p>
+<pre><code><span class="c"># What: sum readings per key.  Where: 2-minute event-time windows.
+# When: fire at the watermark, then again for each late reading (up to 10 minutes).
+# How: accumulate, so each new pane replaces the previous answer.</span>
+sums = (
+    readings
+    | beam.WindowInto(
+        window.FixedWindows(2 * 60),
+        trigger=trigger.AfterWatermark(late=trigger.AfterCount(1)),
+        allowed_lateness=10 * 60,
+        accumulation_mode=trigger.AccumulationMode.ACCUMULATING)
+    | beam.CombinePerKey(sum)
+)</code></pre>
+    <p>We read the parts of the codebase that handle late data:</p>
+    <ul>
+      <li><strong>Late data is observable.</strong> <code>LateDataDroppingDoFnRunner</code> (Java runners-core) drops an element only when the window’s end plus the allowed lateness is behind the input watermark. It counts every drop in a <code>droppedDueToLateness</code> metric, so data loss can be monitored. That is good engineering: silent loss is the worst kind.</li>
+      <li><strong>Triggers are the hard part.</strong> The Python SDK’s <code>trigger.py</code> is 1,765 lines with about 15 trigger classes. It even carries a <code>DataLossReason</code> flag that warns when a trigger may finish early and silently lose data, which matches the authors’ own regret about the trigger language.</li>
+      <li><strong>Portability is the architecture.</strong> One SDK API runs on many engines, so the paper’s claim that engine choice is a latency and cost decision is literally how the code is organized. The efficiency cost is memory: state for every key and window is kept until the window’s lateness deadline passes.</li>
+    </ul>
+    <h3>Our own version</h3>
+    <p>To show the trade-off live in class, we wrote <a href="watermark_demo.py"><code>watermark_demo.py</code></a>, about 120 lines of plain Python with no libraries. It replays the paper’s ten readings (Figure 1 above) through two late-data policies. The core of the “drop late data” policy is a few lines:</p>
+<pre><code>for k, rows in batches():                    <span class="c"># one micro-batch per processing minute</span>
+    for value, ev in rows:
+        w = window_of(ev)
+        if w[1] &lt;= prev_wm:                  <span class="c"># window already closed: drop the row</span>
+            dropped.append(value); continue
+        sums[w] = sums.get(w, 0) + value
+        max_event = max(max_event, ev)
+    wm = max_event - allowed_delay           <span class="c"># watermark = newest event seen, minus slack</span>
+    ...
+    prev_wm = wm                             <span class="c"># Spark judges the next batch by this one</span></code></pre>
+    <p>Policy 1 drops late data, which is what Spark and our project do:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th class="num">Allowed delay</th><th class="num">Readings counted</th><th>Dropped as late</th><th>First final answer</th></tr></thead>
+      <tbody>
+        <tr><td class="num">0 min</td><td class="num">34 of 51</td><td>8, 9</td><td>12:07</td></tr>
+        <tr><td class="num">1 min</td><td class="num">42 of 51</td><td>9</td><td>12:07</td></tr>
+        <tr><td class="num">2 min</td><td class="num">42 of 51</td><td>9</td><td>12:07</td></tr>
+        <tr><td class="num">5 min</td><td class="num">51 of 51</td><td>none</td><td>12:09</td></tr>
+      </tbody>
+    </table></div>
+    <p>Policy 2 re-fires on late data, the paper’s default. Each window gets an on-time answer once the watermark passes its end, and a corrected one when late readings arrive: the second window goes from 14 to 22 at 12:08 and the first from 5 to 14 at 12:09. The last window, 12:06 to 12:08, is still open when the replay ends, because the watermark never reaches 12:08. That is correct and early, but whoever reads the output must handle updated answers.</p>
+    <p>If we were coding the model from scratch, we would keep state per key and window in event time and advance the watermark once per micro-batch as the maximum event time seen minus the allowed delay. We would emit a window when the watermark passes its end, then pick a late-data policy: drop, or re-fire and let consumers overwrite.</p>
+
+    <h2 id="authors">(d) The authors: two teams, one model</h2>
+    <p>The paper exists because Google’s batch team and streaming team agreed on one model. FlumeJava was the batch side; MillWheel was the streaming side.</p>
+    <figure class="wide">
+      <div class="frame">
+        <img src="dataflow_lineage.png" width="2027" height="1125" loading="lazy" alt="How the Dataflow Model came together, 2010 to 2026: FlumeJava (batch, PLDI 2010) and MillWheel (streaming, VLDB 2013) merged into the Dataflow Model (PVLDB 2015), which led to Apache Beam (2016), the Streaming Systems book (2018) and the Watermarks paper (PVLDB 2021), and eleven years later to the VLDB 2026 Test of Time Award and The Dataflow Model Revisited.">
+      </div>
+      <figcaption><b>Figure 2.</b> Where the paper came from and where it led, 2010 to 2026. Drawn by us from the authors’ publication records.</figcaption>
+    </figure>
+    <p>Four authors explain most of the synergy:</p>
+    <ul>
+      <li><strong>Tyler Akidau</strong>, lead author, worked on MillWheel and later wrote O’Reilly’s <em>Streaming Systems</em> (2018) with Reuven Lax and Slava Chernyak. Akidau went on to Snowflake, co-authored the Dynamic Tables paper there (SIGMOD 2025), and lists Redpanda as the 2026 affiliation.</li>
+      <li><strong>Craig Chambers</strong> was a University of Washington professor known for the Cecil language before joining Google in 2007, and was first author of FlumeJava, the batch half of the model.</li>
+      <li><strong>Rafael J. Fernández-Moctezuma</strong> had published research on punctuations in data stream systems (CIDR 2009). The 2026 retrospective credits this work with the team’s academic grounding.</li>
+      <li><strong>Daniel Mills</strong> worked on MillWheel and later on Snowflake’s change queries (SIGMOD 2023).</li>
+    </ul>
+    <p>The mix was compiler and batch experts, streaming engine builders, and a stream-processing researcher. Several of them later built the warehouse features our course uses. That last point inspired us most: the same people carried one idea from a research paper into three generations of products.</p>
+
+    <h2 id="project">How it shaped our project, SmokeStream</h2>
+    <p>Our DATA 226 project turns readings from crowdsourced PurpleAir air sensors into real-time wildfire smoke alerts, and every streaming choice in it is one of the paper’s four questions. The pipeline runs Kafka into Spark Structured Streaming, with MongoDB for live queries, Snowflake for history and Airflow for orchestration. We replay three San Francisco Bay Area fire seasons: 2020, 2021 and 2024.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Paper concept</th><th>Where it lives in SmokeStream</th></tr></thead>
+      <tbody>
+        <tr><td>Event time vs. processing time</td><td>The replay re-sends history with real arrival delays measured from live sensors (median staleness 79.5 s)</td></tr>
+        <tr><td>Windows</td><td>10, 30 and 60-minute tumbling windows per sensor and H3 hexagon</td></tr>
+        <tr><td>Watermark</td><td>Late-data tolerance swept from 0 to 30 minutes</td></tr>
+        <tr><td>Accumulation</td><td>Append mode, one final answer per window, because an alert cannot be un-sent</td></tr>
+        <tr><td>Batch as a bounded stream</td><td>A batch job runs the same code with full hindsight as the baseline</td></tr>
+      </tbody>
+    </table></div>
+    <p>The paper describes the trade-off between correctness and latency; our project measures it. These preliminary results cover the 2020 season (August 1 to September 30), using the measured delay profile and 10-minute windows:</p>
+
+    <figure class="wide">
+      <div class="frame" id="fig3">
+        <div class="pair">
+          <div>
+            <p class="chart-title">Warning time lost by waiting</p>
+            <p class="chart-sub">Median minutes of warning before the official hourly value</p>
+            <svg id="barWarn" role="img" aria-label="Median warning: 109 minutes at 0-minute watermark, 99 at 5, 89 at 15." viewBox="0 0 360 236" width="100%"></svg>
+          </div>
+          <div>
+            <p class="chart-title">Data recovered by waiting</p>
+            <p class="chart-sub">Share of readings missed as late, %</p>
+            <svg id="barMiss" role="img" aria-label="Readings missed as late: 2.07% at 0 minutes, 2.04% at 5, 2.00% at 15." viewBox="0 0 360 236" width="100%"></svg>
+          </div>
+        </div>
+        <div class="tip" id="tip3"></div>
+      </div>
+      <figcaption><b>Figure 3.</b> SmokeStream, 2020 fire season, 10-minute windows. Each extra minute of watermark costs a minute of warning, but the share of missed readings barely moves. Warning time is measured against 20 regulatory monitors that the pipeline never sees.</figcaption>
+    </figure>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th class="num">Watermark</th><th class="num">Final decision after window end</th><th class="num">Median warning before official value</th><th class="num">Readings missed as late</th></tr></thead>
+      <tbody>
+        <tr><td class="num">0 min</td><td class="num">21 min</td><td class="num">109 min</td><td class="num">2.07%</td></tr>
+        <tr><td class="num">5 min</td><td class="num">31 min</td><td class="num">99 min</td><td class="num">2.04%</td></tr>
+        <tr><td class="num">15 min</td><td class="num">41 min</td><td class="num">89 min</td><td class="num">2.00%</td></tr>
+      </tbody>
+    </table></div>
+    <p>Waiting 15 more minutes costs 20 minutes of warning but recovers only 0.07% of readings. The roughly 2% we miss come from sensors that drop out for long stretches, so no reasonable watermark can wait for them. That is the paper’s core principle, never rely on completeness, showing up in real public-health data.</p>
+
+    <h2 id="learned">What we learned</h2>
+    <ol>
+      <li><strong>Keep the two clocks apart.</strong> Event time and processing time are different axes, and every streaming decision starts from that.</li>
+      <li><strong>Completeness is a guess.</strong> A watermark trades latency for correctness; it is never a guarantee.</li>
+      <li><strong>Batch is a bounded stream.</strong> The four-question split lets one codebase run on batch, micro-batch or streaming engines, which is why our batch and streaming jobs share code.</li>
+      <li><strong>Late data needs an explicit policy.</strong> Dropping is cheap and final; re-firing is correct but pushes updates onto consumers. Alerts need final answers.</li>
+      <li><strong>Interfaces decide adoption.</strong> Users converged on two triggers and on declared freshness targets like <code>TARGET_LAG</code>, not on a rich trigger language.</li>
+      <li><strong>Sound ideas outlive a weak interface.</strong> Parts of the paper aged badly, yet its core won a Test of Time Award.</li>
+    </ol>
+
+    <h2 id="extend">How the work could be extended</h2>
+    <ol>
+      <li><strong>Measure the trade-off the paper only describes.</strong> A benchmark of correctness, latency and cost across engines; our watermark sweep is one real-world example.</li>
+      <li><strong>Adaptive watermarks per source.</strong> Learn each sensor’s delay profile instead of using one global tolerance, so slow sources stop holding back fast ones.</li>
+      <li><strong>Fire-once guarantees for actions.</strong> Alerts and notifications cannot be retracted, and the 2026 retrospective names this as an open need.</li>
+      <li><strong>Declared freshness in the warehouse.</strong> Rebuild our Snowflake layer with Dynamic Tables and <code>TARGET_LAG</code>, and compare it with our hand-built windows.</li>
+      <li><strong>Ordering semantics.</strong> Per-key ordering guarantees, which the authors admit the model never specified.</li>
+    </ol>
+
+    <h2 id="refs">References</h2>
+    <ol class="refs">
+      <li>T. Akidau, R. Bradshaw, C. Chambers, S. Chernyak, R. J. Fernández-Moctezuma, R. Lax, S. McVeety, D. Mills, F. Perry, E. Schmidt, S. Whittle. <a href="https://doi.org/10.14778/2824032.2824076">The Dataflow Model: A Practical Approach to Balancing Correctness, Latency, and Cost in Massive-Scale, Unbounded, Out-of-Order Data Processing</a>. PVLDB 8(12): 1792–1803, 2015.</li>
+      <li>T. Akidau, R. J. Fernández-Moctezuma, R. Lax, D. Mills. <a href="https://doi.org/10.14778/3827998.3838710">The Dataflow Model Revisited</a>. PVLDB 19(12): 4953–4964, 2026.</li>
+      <li>T. Akidau, E. Begoli, S. Chernyak, F. Hueske, K. Knight, K. Knowles, D. Mills, D. Sotolongo. <a href="https://doi.org/10.14778/3476311.3476389">Watermarks in Stream Processing Systems: Semantics and Comparative Analysis of Apache Flink and Google Cloud Dataflow</a>. PVLDB 14(12): 3135–3147, 2021.</li>
+      <li>T. Akidau et al. MillWheel: Fault-Tolerant Stream Processing at Internet Scale. PVLDB 6(11): 1033–1044, 2013.</li>
+      <li>C. Chambers et al. <a href="https://research.google/pubs/flumejava-easy-efficient-data-parallel-pipelines/">FlumeJava: Easy, Efficient Data-Parallel Pipelines</a>. PLDI 2010: 363–375.</li>
+      <li>M. Armbrust et al. Structured Streaming: A Declarative API for Real-Time Applications in Apache Spark. SIGMOD 2018: 601–613.</li>
+      <li>T. Akidau, S. Chernyak, R. Lax. <a href="https://www.oreilly.com/library/view/streaming-systems/9781491983867/">Streaming Systems</a>. O’Reilly Media, 2018.</li>
+      <li>D. Sotolongo, D. Mills, T. Akidau et al. <a href="https://arxiv.org/abs/2504.10438">Streaming Democratized: Ease Across the Latency Spectrum with Delayed View Semantics and Snowflake Dynamic Tables</a>. SIGMOD Companion 2025.</li>
+      <li><a href="https://github.com/apache/beam">Apache Beam source code</a>, accessed November 2026.</li>
+      <li><a href="https://vldb.org/awards_10year.html">VLDB Test of Time Award</a>, <a href="https://portal.core.edu.au/conf-ranks/?search=VLDB&amp;by=all&amp;source=CORE2023">ICORE conference portal</a>, <a href="https://scholar.google.com/citations?view_op=top_venues&amp;hl=en&amp;vq=eng_databasesinformationsystems">Google Scholar Metrics</a>, <a href="https://www.semanticscholar.org/paper/fa63c3f53413ced7946623889c416e34a28676ea">Semantic Scholar</a>, all accessed November 2026.</li>
+    </ol>
+  </article>
+
+  <footer>
+    <p>Written by Vraj Patel for DATA 226 (Big Data and Warehousing) at San José State University, Fall 2026. This is an independent student review. All credit for the Dataflow Model belongs to its authors, cited above; the figures, critique and experiments are our own. Questions and corrections are welcome.</p>
+  </footer>
+</main>
+
+<script>
+(function () {
+  // theme toggle
+  var root = document.documentElement, btn = document.getElementById('themeBtn');
+  function isDark() {
+    var t = root.getAttribute('data-theme');
+    if (t) return t === 'dark';
+    return window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
+  }
+  function label() { btn.textContent = isDark() ? 'Light mode' : 'Dark mode'; }
+  try { var saved = localStorage.getItem('theme'); if (saved) root.setAttribute('data-theme', saved); } catch (e) {}
+  label();
+  btn.addEventListener('click', function () {
+    var next = isDark() ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('theme', next); } catch (e) {}
+    label();
+  });
+
+  var NS = 'http://www.w3.org/2000/svg';
+  function el(name, attrs, parent, text) {
+    var n = document.createElementNS(NS, name);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    if (text != null) n.textContent = text;
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  function clock(m) {
+    var mm = Math.floor(m), ss = Math.round((m - mm) * 60);
+    if (ss === 60) { mm += 1; ss = 0; }
+    return '12:' + String(mm).padStart(2, '0') + (ss ? ':' + String(ss).padStart(2, '0') : '');
+  }
+  function tipper(frame, tip) {
+    return {
+      show: function (evt, html) {
+        tip.innerHTML = html; tip.style.opacity = 1;
+        var r = frame.getBoundingClientRect();
+        var x = evt.clientX - r.left + 12, y = evt.clientY - r.top - 36;
+        var w = tip.offsetWidth;
+        if (x + w > r.width - 8) x = evt.clientX - r.left - w - 12;
+        tip.style.left = x + 'px'; tip.style.top = y + 'px';
+      },
+      hide: function () { tip.style.opacity = 0; }
+    };
+  }
+
+  // ---------- Figure 1: event time vs processing time ----------
+  var R = [ // value, event time, processing time (minutes after 12:00), from watermark_demo.py
+    [5, 0.50, 5.70], [7, 2.50, 6.30], [3, 3.60, 6.60], [4, 3.75, 6.75], [3, 4.40, 6.80],
+    [8, 3.20, 7.20], [3, 6.80, 7.50], [9, 1.40, 8.30], [8, 7.60, 8.80], [1, 7.80, 9.00]
+  ];
+  // watermark after each 1-minute micro-batch = max event time seen so far
+  var WM = [];
+  (function () {
+    var maxEv = -Infinity;
+    for (var b = 5; b <= 9; b++) {
+      R.forEach(function (r) { if (r[2] >= b && r[2] < b + 1) maxEv = Math.max(maxEv, r[1]); });
+      WM.push([b + 1, maxEv]);
+    }
+  })();
+  function wmAt(p) { var v = -Infinity; WM.forEach(function (w) { if (w[0] <= p) v = w[1]; }); return v; }
+
+  var svg = document.getElementById('scatter');
+  var M = { l: 64, r: 20, t: 34, b: 52 }, W = 800, H = 400;
+  var x = function (ev) { return M.l + (ev / 8) * (W - M.l - M.r); };
+  var y = function (p) { return H - M.b - ((p - 5) / 5) * (H - M.t - M.b); };
+  var sums = [0, 0, 0, 0];
+  R.forEach(function (r) { sums[Math.floor(r[1] / 2)] += r[0]; });
+  for (var i = 0; i < 4; i++) {
+    if (i % 2 === 0) el('rect', { x: x(i * 2), y: M.t, width: x(2) - x(0), height: H - M.t - M.b, fill: 'var(--band)' }, svg);
+    el('text', { x: (x(i * 2) + x(i * 2 + 2)) / 2, y: M.t - 12, 'text-anchor': 'middle', 'font-size': 13, 'font-weight': 600, fill: 'var(--ink-2)' }, svg, 'sum = ' + sums[i]);
+  }
+  for (var p = 5; p <= 10; p++) {
+    el('line', { x1: M.l, x2: W - M.r, y1: y(p), y2: y(p), stroke: 'var(--grid)', 'stroke-width': 1 }, svg);
+    el('text', { x: M.l - 10, y: y(p) + 4, 'text-anchor': 'end', 'font-size': 12, fill: 'var(--ink-3)' }, svg, clock(p));
+  }
+  for (var e = 0; e <= 8; e += 2) {
+    el('text', { x: x(e), y: H - M.b + 20, 'text-anchor': 'middle', 'font-size': 12, fill: 'var(--ink-3)' }, svg, clock(e));
+  }
+  el('line', { x1: M.l, x2: W - M.r, y1: H - M.b, y2: H - M.b, stroke: 'var(--ink-3)', 'stroke-width': 1 }, svg);
+  el('text', { x: (M.l + W - M.r) / 2, y: H - 10, 'text-anchor': 'middle', 'font-size': 13, fill: 'var(--ink-2)' }, svg, 'Event time (when the reading happened) →');
+  el('text', { x: 16, y: (M.t + H - M.b) / 2, 'text-anchor': 'middle', 'font-size': 13, fill: 'var(--ink-2)', transform: 'rotate(-90 16 ' + (M.t + H - M.b) / 2 + ')' }, svg, 'Processing time (when it arrived) →');
+
+  // watermark step line: at processing time p (from batch end b), watermark = WM value
+  var d = '';
+  WM.forEach(function (w, j) {
+    var px = x(w[1]), py = y(w[0]);
+    d += (j === 0 ? 'M' : 'L') + px + ' ' + py;
+    var next = WM[j + 1];
+    d += 'L' + px + ' ' + (next ? y(next[0]) : y(10));
+  });
+  el('path', { d: d, fill: 'none', stroke: 'var(--ink)', 'stroke-width': 2, 'stroke-linejoin': 'round' }, svg);
+  el('text', { x: x(5.6), y: y(8) - 8, 'text-anchor': 'middle', 'font-size': 12, 'font-weight': 600, fill: 'var(--ink)' }, svg, 'watermark');
+
+  var t1 = tipper(document.getElementById('fig1'), document.getElementById('tip1'));
+  R.forEach(function (r, idx) {
+    var left = (idx === 2 || idx === 8);
+    var win = Math.floor(r[1] / 2) * 2;
+    var late = (win + 2) <= wmAt(Math.floor(r[2]));
+    var g = el('g', { style: 'cursor:default' }, svg);
+    el('circle', { cx: x(r[1]), cy: y(r[2]), r: 16, fill: 'transparent' }, g);
+    el('circle', { cx: x(r[1]), cy: y(r[2]), r: 9, fill: late ? 'var(--series-2)' : 'var(--series-1)', stroke: 'var(--card)', 'stroke-width': 2 }, g);
+    el('text', { x: x(r[1]) + (left ? -13 : 13), y: y(r[2]) + 4, 'text-anchor': left ? 'end' : 'start', 'font-size': 12, 'font-weight': 600, fill: 'var(--ink)' }, g, r[0]);
+    var html = '<b>Reading ' + r[0] + '</b>' + (late ? ' · late' : '') + '<br>happened ' + clock(r[1]) + ', arrived ' + clock(r[2]) +
+      '<br>window ' + clock(win) + '–' + clock(win + 2);
+    g.addEventListener('mousemove', function (ev) { t1.show(ev, html); });
+    g.addEventListener('mouseleave', t1.hide);
+  });
+
+  // ---------- Figure 3: two single-series bar charts ----------
+  function bars(id, data, max, ticks, fmt, unit, tfmt) {
+    tfmt = tfmt || fmt;
+    var s = document.getElementById(id), w = 360, h = 236, m = { l: 44, r: 10, t: 22, b: 48 };
+    var bw = 56, n = data.length, slot = (w - m.l - m.r) / n;
+    var yy = function (v) { return h - m.b - (v / max) * (h - m.t - m.b); };
+    ticks.forEach(function (t) {
+      el('line', { x1: m.l, x2: w - m.r, y1: yy(t), y2: yy(t), stroke: 'var(--grid)', 'stroke-width': 1 }, s);
+      el('text', { x: m.l - 8, y: yy(t) + 4, 'text-anchor': 'end', 'font-size': 11, fill: 'var(--ink-3)' }, s, tfmt(t));
+    });
+    el('line', { x1: m.l, x2: w - m.r, y1: h - m.b, y2: h - m.b, stroke: 'var(--ink-3)', 'stroke-width': 1 }, s);
+    var t3 = tipper(document.getElementById('fig3'), document.getElementById('tip3'));
+    data.forEach(function (dv, j) {
+      var cx = m.l + slot * j + slot / 2, top = yy(dv[1]), base = h - m.b, r = 4;
+      var g = el('g', {}, s);
+      el('rect', { x: cx - slot / 2, y: m.t, width: slot, height: h - m.t - m.b, fill: 'transparent' }, g);
+      el('path', { d: 'M' + (cx - bw / 2) + ' ' + base + 'V' + (top + r) + 'Q' + (cx - bw / 2) + ' ' + top + ' ' + (cx - bw / 2 + r) + ' ' + top +
+        'H' + (cx + bw / 2 - r) + 'Q' + (cx + bw / 2) + ' ' + top + ' ' + (cx + bw / 2) + ' ' + (top + r) + 'V' + base + 'Z', fill: 'var(--series-1)' }, g);
+      el('text', { x: cx, y: top - 7, 'text-anchor': 'middle', 'font-size': 12, 'font-weight': 600, fill: 'var(--ink)' }, g, fmt(dv[1]) + unit);
+      el('text', { x: cx, y: h - m.b + 18, 'text-anchor': 'middle', 'font-size': 12, fill: 'var(--ink-2)' }, g, dv[0] + ' min');
+      var html = '<b>Watermark ' + dv[0] + ' min</b><br>' + fmt(dv[1]) + unit;
+      g.addEventListener('mousemove', function (ev) { t3.show(ev, html); });
+      g.addEventListener('mouseleave', t3.hide);
+    });
+    el('text', { x: (m.l + w - m.r) / 2, y: h - 4, 'text-anchor': 'middle', 'font-size': 11, fill: 'var(--ink-3)' }, s, 'Watermark (allowed lateness)');
+  }
+  bars('barWarn', [[0, 109], [5, 99], [15, 89]], 120, [0, 40, 80, 120], function (v) { return String(v); }, ' min');
+  bars('barMiss', [[0, 2.07], [5, 2.04], [15, 2.00]], 2.5, [0, 0.5, 1, 1.5, 2, 2.5], function (v) { return v.toFixed(2); }, '%', function (v) { return String(v); });
+})();
+</script>
+</body>
+</html>
