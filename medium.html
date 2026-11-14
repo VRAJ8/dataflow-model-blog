@@ -7,7 +7,7 @@
 <meta name="description" content="A review of Akidau et al., “The Dataflow Model” (PVLDB 2015): what it says, how it aged, and what it taught me while building a real-time wildfire smoke alert pipeline.">
 <meta name="author" content="Vraj Patel">
 <meta property="og:type" content="article">
-<meta property="og:title" content="Never Wait for Completeness: what Google’s Dataflow Model taught me about real-time smoke alerts">
+<meta property="og:title" content="Never Wait for Completeness: What Google’s Dataflow Model Taught Me About Real-Time Smoke Alerts">
 <meta property="og:description" content="A review of Akidau et al., “The Dataflow Model” (PVLDB 2015), from four angles: peer reviewer, industry, code and authors.">
 <meta property="og:image" content="https://vraj8.github.io/dataflow-model-blog/dataflow_lineage.png">
 <meta name="twitter:card" content="summary_large_image">
@@ -109,7 +109,7 @@
       </ul>
     
 
-    <h2 id="code">(c) The code: Apache Beam, and my own replay</h2>
+    <h2 id="code">(c&#8203;) The code: Apache Beam, and my own replay</h2>
     <p>The authors did release code. The Dataflow SDK became <a href="https://github.com/apache/beam">Apache Beam</a>: Apache-2.0, about 8.7k GitHub stars and 4.8k forks, with Java, Python and Go SDKs and runners for Dataflow, Flink and Spark. In Beam’s Python SDK, the paper’s four questions map almost one-to-one onto a few lines:</p>
 <pre><code># What: sum readings per key.  Where: 2-minute event-time windows.
 # When: fire at the watermark, then again for each late reading (up to 10 minutes).
