@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Never Wait for Completeness: What Google’s Dataflow Model Taught Me About Real-Time Smoke Alerts</title>
+<meta name="description" content="A review of Akidau et al., “The Dataflow Model” (PVLDB 2015): what it says, how it aged, and what it taught me while building a real-time wildfire smoke alert pipeline.">
+<meta name="author" content="Vraj Patel">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Never Wait for Completeness: what Google’s Dataflow Model taught me about real-time smoke alerts">
+<meta property="og:description" content="A review of Akidau et al., “The Dataflow Model” (PVLDB 2015), from four angles: peer reviewer, industry, code and authors.">
+<meta property="og:image" content="https://vraj8.github.io/dataflow-model-blog/dataflow_lineage.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://vraj8.github.io/dataflow-model-blog/">
+<meta name="robots" content="noindex">
+<style>body{max-width:700px;margin:40px auto;padding:0 16px;font:18px/1.6 Georgia,serif}img{max-width:100%}pre{overflow-x:auto;background:#f4f4f4;padding:12px}</style>
+</head>
+<body>
+<article>
+    
+    <h1>Never Wait for Completeness: What Google’s Dataflow Model Taught Me About Real-Time Smoke Alerts</h1>
+    <p class="dek">A review of a 2015 VLDB paper that changed how the industry thinks about late data, read through the lens of a wildfire-smoke pipeline I built this semester.</p>
+
+    <p><em>By <strong>Vraj Patel</strong> · DATA 226, Big Data and Warehousing · San José State University · November 2026 · 14 min read</em></p>
+
+    <h3>The paper this post discusses</h3><blockquote>
+      <p>This post summarizes and critiques the following paper. All ideas from the paper belong to its authors; the opinions, figures and experiments here are my own.</p>
+      <p class="title">The Dataflow Model: A Practical Approach to Balancing Correctness, Latency, and Cost in Massive-Scale, Unbounded, Out-of-Order Data Processing</p>
+      <p>Tyler Akidau, Robert Bradshaw, Craig Chambers, Slava Chernyak, Rafael J. Fernández-Moctezuma, Reuven Lax, Sam McVeety, Daniel Mills, Frances Perry, Eric Schmidt, Sam Whittle (Google).</p>
+      <p><em>Proceedings of the VLDB Endowment</em>, Vol. 8, No. 12, pp. 1792–1803, 2015. DOI: <a href="https://doi.org/10.14778/2824032.2824076">10.14778/2824032.2824076</a> · <a href="https://www.vldb.org/pvldb/vol8/p1792-Akidau.pdf">Free PDF from VLDB</a></p>
+      <p class="note">I also draw on the authors’ own follow-up: T. Akidau, R. J. Fernández-Moctezuma, R. Lax, D. Mills, “The Dataflow Model Revisited,” PVLDB 19(12): 4953–4964, 2026 (<a href="https://doi.org/10.14778/3827998.3838710">DOI</a>).</p>
+    </blockquote>
+
+    <h3>In short</h3>
+      <ul>
+        <li>The paper says a pipeline over endless, out-of-order data should never wait for the data to be “complete”. Instead, it should let engineers choose how much correctness to trade for speed and cost.</li>
+        <li>It splits every pipeline into four questions (what, where, when, how), so one program runs unchanged on batch or streaming engines.</li>
+        <li>My verdict: accept as a reviewer, fund as an investor, but skip its complex trigger language. Its own authors now say the same.</li>
+        <li>My smoke-alert project measured the trade-off the paper only describes. Waiting 15 more minutes for late data cost 20 minutes of warning and recovered 0.07% of readings.</li>
+      </ul>
+    
+
+    
+
+    <p>Every real-time pipeline has to decide how long to wait for late data. In 2015 a team at Google argued the answer is: never wait for the data to be complete. Give engineers controls to trade correctness against latency and cost instead. I read that paper for my DATA 226 significant-paper presentation, and it turned out to describe the exact trade-off my own course project measures.</p>
+
+    <h2 id="why">Why I picked it</h2>
+    <p>I wanted a paper from a top venue that my project actually builds on. This one has just won VLDB’s 2026 Test of Time Award, which goes to the VLDB paper from 10 to 12 years earlier with the most lasting impact, especially in real products.</p>
+    <figure><img src="https://vraj8.github.io/dataflow-model-blog/medium/t_evidence.png" alt="Evidence table: venue PVLDB/VLDB 2015, CORE A*, #6 in Google Scholar Metrics, 853 citations, VLDB 2026 Test of Time Award"></figure>
+    <p>It also fits the course. Event time, windowing and watermarks are the core of streaming, and the paper’s ideas now live inside warehouse features I used in class, like Snowflake’s Dynamic Tables.</p>
+
+    <h2 id="problem">The problem in 2015</h2>
+    <p>Data from web logs, phones and sensors never ends, and it arrives out of order. A phone can go offline for an hour and then upload events that happened long ago. The paper’s running example is a video provider that bills advertisers per viewing session, so the answer has to be both fast and correct.</p>
+    <p>In 2015 there was no good way to get both:</p>
+    <ul>
+      <li><strong>Batch systems</strong> (MapReduce, Spark) waited until all the data was collected, so results were slow.</li>
+      <li><strong>Streaming systems</strong> of the time (Storm, the first Spark Streaming) were fast but often lacked exactly-once results or windows based on when events actually happened.</li>
+      <li><strong>The Lambda Architecture</strong> ran a batch system and a streaming system side by side, so teams had to build two pipelines and keep them in agreement.</li>
+    </ul>
+    <p>The authors’ diagnosis was that every one of these designs assumes the input will eventually be complete. For unbounded data that day never comes, so they proposed a model built on the opposite assumption.</p>
+
+    <h2 id="idea">The big idea: four questions</h2>
+    <p>The paper splits every pipeline into four separate questions. Because of that split, one pipeline can run on a batch, micro-batch or streaming engine without changing its meaning.</p>
+    <figure><img src="https://vraj8.github.io/dataflow-model-blog/medium/t_four_questions.png" alt="The four questions: what, where, when, how, with the paper’s answer and how my project answers each"></figure>
+    <p>Two ideas carry the rest of the paper.</p>
+    <p><strong>Event time is not processing time.</strong> Event time is when something happened; processing time is when the pipeline saw it. The gap between them changes all the time, so windows are defined in event time.</p>
+    <p><strong>The watermark is only a guess.</strong> A watermark is the system’s estimate that it has seen everything up to some event time. If it moves too fast, data arrives behind it and is late. If it moves too slowly, one slow source holds back every result. So the paper adds triggers that can fire early, at the watermark, and again for late data.</p>
+    <p>The paper explains all of this with one example: ten readings that sum to 51. I redrew it below from the paper’s Figure 5, with the times read off by eye.</p>
+
+    <figure><img src="https://vraj8.github.io/dataflow-model-blog/medium/fig1.png" alt="Ten readings plotted by event time and processing time with the watermark; readings 8 and 9 arrive late"><figcaption>Figure 1. My redrawing of the paper’s running example. The watermark (black step line) is the pipeline’s guess of how far event time is complete. The readings of 8 and 9 show up after the watermark has passed their windows. A pipeline that drops late data loses them; the paper’s default re-fires those windows with corrected sums.</figcaption></figure>
+
+    <p>A batch engine returns the right sums (14, 22, 3 and 12 per two-minute window), but only at the end. A streaming engine with a watermark returns one answer per window as soon as the watermark passes it. Then the late readings arrive and the first two windows fire again with corrected values. The code is the same each time; only the trigger and engine change.</p>
+
+    <h2 id="retro">Eleven years later, the authors graded themselves</h2>
+    <p>The 2026 retrospective’s verdict fits in one line: “we got the physics right, but the interface wrong.” It is unusually honest, and it gave my critique something solid to stand on.</p>
+    <figure><img src="https://vraj8.github.io/dataflow-model-blog/medium/t_retrospective.png" alt="What the authors say they got right, got wrong and missed"></figure>
+    <p>One detail stood out for my project. The authors say alerts are the textbook case where a watermark is still needed, because a correction can update a number but cannot take back an alert that already went out.</p>
+
+    <h2 id="review">(a) As peer reviewers: accept, with a minor revision</h2>
+    <p><strong>Verdict: accept, minor revision</strong></p>
+    <p>If this paper landed on my desk as a reviewer, I would accept it. Its ideas are clear, grounded in real systems and widely reusable. I would ask for an evaluation section before publication.</p>
+    <figure><img src="https://vraj8.github.io/dataflow-model-blog/medium/t_scorecard.png" alt="My reviewer scorecard: novelty 4/5, clarity 5/5, practical relevance 5/5, evaluation 2/5, reproducibility 3/5"></figure>
+    <h3>Strengths</h3>
+    <ul>
+      <li>The what / where / when / how split is clean, and Flink, Spark Structured Streaming and Kafka Streams all adopted parts of it.</li>
+      <li>Batch becomes a special case of streaming, so choosing an engine no longer changes whether the answer is correct.</li>
+      <li>The paper is honest about trade-offs: it never claims you can have full correctness, low latency and low cost at once.</li>
+    </ul>
+    <h3>Weaknesses and requests to the authors</h3>
+    <ul>
+      <li>Add a quantitative evaluation: throughput, latency and cost on at least one real pipeline.</li>
+      <li>Specify how the watermark is computed and passed between stages. It is only described as a heuristic here; this was formalized later in a <a href="https://doi.org/10.14778/3476311.3476389">2021 PVLDB paper</a>.</li>
+      <li>Justify the complexity of the trigger language with user evidence, which the authors now concede was missing.</li>
+      <li>Measure the cost of keeping state around for late data and retractions.</li>
+    </ul>
+    <p><strong>Evidence from my own project.</strong> Because the model leaves the exact watermark rules open, engines differ in the details. I found that Spark (3.4 and later) drops late rows using the previous micro-batch’s watermark, not the current one. My first simulator used the current one, and only an automated test against the real engine caught the mismatch. A precise specification in the paper would have prevented this kind of drift.</p>
+
+    <h2 id="industry">(b) Industry view: fund it</h2>
+    <p>The idea is commercially proven. It became Google Cloud Dataflow, a paid managed service, and Apache Beam, its open SDK. Apache Flink built directly on the model, and Spark Structured Streaming and Kafka Streams adopted watermarks in simpler form.</p>
+    <p>The strongest sign is that the freshness idea now ships in every major data platform under a different name:</p>
+    <figure><img src="https://vraj8.github.io/dataflow-model-blog/medium/t_freshness.png" alt="Freshness settings: Delta Live Tables 2021, BigQuery max_staleness 2022, Snowflake TARGET_LAG 2023, Flink FRESHNESS 2024"></figure>
+    <p>If I sat on a company’s internal patent review board in 2015, this is the memo I would write:</p>
+    <p><strong>To:</strong> Patent and investment review board · <strong>Re:</strong> Unified batch and streaming model · <strong>Recommendation:</strong> Fund</p>
+      <ul>
+        <li><strong>Fund the platform.</strong> One pipeline instead of the Lambda Architecture’s two cuts both engineering and compute cost.</li>
+        <li><strong>Protect it through the service, not patents.</strong> Publishing the model openly and releasing an open SDK makes our own runner the reference implementation. The value comes from adoption, and a patent would slow adoption down.</li>
+        <li><strong>Risks.</strong> Free runners such as Flink and Spark will commoditize the engine, and most analytics customers are happy with minutes of freshness, not milliseconds.</li>
+        <li><strong>Do not fund</strong> more work on the trigger language. Put that money into declarative SQL with freshness targets, which is where users went.</li>
+      </ul>
+    
+
+    <h2 id="code">(c) The code: Apache Beam, and my own replay</h2>
+    <p>The authors did release code. The Dataflow SDK became <a href="https://github.com/apache/beam">Apache Beam</a>: Apache-2.0, about 8.7k GitHub stars and 4.8k forks, with Java, Python and Go SDKs and runners for Dataflow, Flink and Spark. In Beam’s Python SDK, the paper’s four questions map almost one-to-one onto a few lines:</p>
+<pre><code># What: sum readings per key.  Where: 2-minute event-time windows.
+# When: fire at the watermark, then again for each late reading (up to 10 minutes).
+# How: accumulate, so each new pane replaces the previous answer.
+sums = (
+    readings
+    | beam.WindowInto(
+        window.FixedWindows(2 * 60),
+        trigger=trigger.AfterWatermark(late=trigger.AfterCount(1)),
+        allowed_lateness=10 * 60,
+        accumulation_mode=trigger.AccumulationMode.ACCUMULATING)
+    | beam.CombinePerKey(sum)
+)</code></pre>
+    <p>I read the parts of the codebase that handle late data:</p>
+    <ul>
+      <li><strong>Late data is observable.</strong> <code>LateDataDroppingDoFnRunner</code> (Java runners-core) drops an element only when the window’s end plus the allowed lateness is behind the input watermark. It counts every drop in a <code>droppedDueToLateness</code> metric, so data loss can be monitored. That is good engineering: silent loss is the worst kind.</li>
+      <li><strong>Triggers are the hard part.</strong> The Python SDK’s <code>trigger.py</code> is 1,765 lines with about 15 trigger classes. It even carries a <code>DataLossReason</code> flag that warns when a trigger may finish early and silently lose data, which matches the authors’ own regret about the trigger language.</li>
+      <li><strong>Portability is the architecture.</strong> One SDK API runs on many engines, so the paper’s claim that engine choice is a latency and cost decision is literally how the code is organized. The efficiency cost is memory: state for every key and window is kept until the window’s lateness deadline passes.</li>
+    </ul>
+    <h3>My own version</h3>
+    <p>To show the trade-off live in class, I wrote <a href="https://github.com/VRAJ8/dataflow-model-blog/blob/main/watermark_demo.py"><code>watermark_demo.py</code></a>, about 120 lines of plain Python with no libraries. It replays the paper’s ten readings (Figure 1 above) through two late-data policies. The core of the “drop late data” policy is a few lines:</p>
+<pre><code>for k, rows in batches():                    # one micro-batch per processing minute
+    for value, ev in rows:
+        w = window_of(ev)
+        if w[1] &lt;= prev_wm:                  # window already closed: drop the row
+            dropped.append(value); continue
+        sums[w] = sums.get(w, 0) + value
+        max_event = max(max_event, ev)
+    wm = max_event - allowed_delay           # watermark = newest event seen, minus slack
+    ...
+    prev_wm = wm                             # Spark judges the next batch by this one</code></pre>
+    <p>Policy 1 drops late data, which is what Spark and my project do:</p>
+    <figure><img src="https://vraj8.github.io/dataflow-model-blog/medium/t_drop_late.png" alt="Drop-late policy: 0 min delay counts 34 of 51, 1-2 min count 42, 5 min counts all 51"></figure>
+    <p>Policy 2 re-fires on late data, the paper’s default. Each window gets an on-time answer once the watermark passes its end, and a corrected one when late readings arrive: the second window goes from 14 to 22 at 12:08 and the first from 5 to 14 at 12:09. The last window, 12:06 to 12:08, is still open when the replay ends, because the watermark never reaches 12:08. That is correct and early, but whoever reads the output must handle updated answers.</p>
+    <p>If I were coding the model from scratch, I would keep state per key and window in event time and advance the watermark once per micro-batch as the maximum event time seen minus the allowed delay. I would emit a window when the watermark passes its end, then pick a late-data policy: drop, or re-fire and let consumers overwrite.</p>
+
+    <h2 id="authors">(d) The authors: two teams, one model</h2>
+    <p>The paper exists because Google’s batch team and streaming team agreed on one model. FlumeJava was the batch side; MillWheel was the streaming side.</p>
+    <figure><img src="https://vraj8.github.io/dataflow-model-blog/medium/../dataflow_lineage.png" alt="Lineage of the Dataflow Model from FlumeJava and MillWheel to Apache Beam and the 2026 Test of Time Award"><figcaption>Figure 2. Where the paper came from and where it led, 2010 to 2026. Drawn by me from the authors’ publication records.</figcaption></figure>
+    <p>Four authors explain most of the synergy:</p>
+    <ul>
+      <li><strong>Tyler Akidau</strong>, lead author, worked on MillWheel and later wrote O’Reilly’s <em>Streaming Systems</em> (2018) with Reuven Lax and Slava Chernyak. Akidau went on to Snowflake, co-authored the Dynamic Tables paper there (SIGMOD 2025), and lists Redpanda as the 2026 affiliation.</li>
+      <li><strong>Craig Chambers</strong> was a University of Washington professor known for the Cecil language before joining Google in 2007, and was first author of FlumeJava, the batch half of the model.</li>
+      <li><strong>Rafael J. Fernández-Moctezuma</strong> had published research on punctuations in data stream systems (CIDR 2009). The 2026 retrospective credits this work with the team’s academic grounding.</li>
+      <li><strong>Daniel Mills</strong> worked on MillWheel and later on Snowflake’s change queries (SIGMOD 2023).</li>
+    </ul>
+    <p>The mix was compiler and batch experts, streaming engine builders, and a stream-processing researcher. Several of them later built the warehouse features my course uses. That last point inspired me most: the same people carried one idea from a research paper into three generations of products.</p>
+
+    <h2 id="project">How it shaped my project, SmokeStream</h2>
+    <p>My DATA 226 project turns readings from crowdsourced PurpleAir air sensors into real-time wildfire smoke alerts, and every streaming choice in it is one of the paper’s four questions. The pipeline runs Kafka into Spark Structured Streaming, with MongoDB for live queries, Snowflake for history and Airflow for orchestration. I replay three San Francisco Bay Area fire seasons: 2020, 2021 and 2024.</p>
+    <figure><img src="https://vraj8.github.io/dataflow-model-blog/medium/t_concepts.png" alt="Where each paper concept lives in SmokeStream"></figure>
+    <p>The paper describes the trade-off between correctness and latency; my project measures it. These preliminary results cover the 2020 season (August 1 to September 30), using the measured delay profile and 10-minute windows:</p>
+
+    <figure><img src="https://vraj8.github.io/dataflow-model-blog/medium/fig3.png" alt="Bar charts: warning time drops from 109 to 89 minutes as the watermark grows, missed readings stay near 2%"><figcaption>Figure 3. SmokeStream, 2020 fire season, 10-minute windows. Each extra minute of watermark costs a minute of warning, but the share of missed readings barely moves. Warning time is measured against 20 regulatory monitors that the pipeline never sees.</figcaption></figure>
+
+    <figure><img src="https://vraj8.github.io/dataflow-model-blog/medium/t_results.png" alt="Watermark 0/5/15 min: final decision 21/31/41 min after window end, warning 109/99/89 min, missed 2.07/2.04/2.00%"></figure>
+    <p>Waiting 15 more minutes costs 20 minutes of warning but recovers only 0.07% of readings. The roughly 2% I miss come from sensors that drop out for long stretches, so no reasonable watermark can wait for them. That is the paper’s core principle, never rely on completeness, showing up in real public-health data.</p>
+
+    <h2 id="learned">What I learned</h2>
+    <ol>
+      <li><strong>Keep the two clocks apart.</strong> Event time and processing time are different axes, and every streaming decision starts from that.</li>
+      <li><strong>Completeness is a guess.</strong> A watermark trades latency for correctness; it is never a guarantee.</li>
+      <li><strong>Batch is a bounded stream.</strong> The four-question split lets one codebase run on batch, micro-batch or streaming engines, which is why my batch and streaming jobs share code.</li>
+      <li><strong>Late data needs an explicit policy.</strong> Dropping is cheap and final; re-firing is correct but pushes updates onto consumers. Alerts need final answers.</li>
+      <li><strong>Interfaces decide adoption.</strong> Users converged on two triggers and on declared freshness targets like <code>TARGET_LAG</code>, not on a rich trigger language.</li>
+      <li><strong>Sound ideas outlive a weak interface.</strong> Parts of the paper aged badly, yet its core won a Test of Time Award.</li>
+    </ol>
+
+    <h2 id="extend">How the work could be extended</h2>
+    <ol>
+      <li><strong>Measure the trade-off the paper only describes.</strong> A benchmark of correctness, latency and cost across engines; my watermark sweep is one real-world example.</li>
+      <li><strong>Adaptive watermarks per source.</strong> Learn each sensor’s delay profile instead of using one global tolerance, so slow sources stop holding back fast ones.</li>
+      <li><strong>Fire-once guarantees for actions.</strong> Alerts and notifications cannot be retracted, and the 2026 retrospective names this as an open need.</li>
+      <li><strong>Declared freshness in the warehouse.</strong> Rebuild my Snowflake layer with Dynamic Tables and <code>TARGET_LAG</code>, and compare it with my hand-built windows.</li>
+      <li><strong>Ordering semantics.</strong> Per-key ordering guarantees, which the authors admit the model never specified.</li>
+    </ol>
+
+    <h2 id="refs">References</h2>
+    <ol class="refs">
+      <li>T. Akidau, R. Bradshaw, C. Chambers, S. Chernyak, R. J. Fernández-Moctezuma, R. Lax, S. McVeety, D. Mills, F. Perry, E. Schmidt, S. Whittle. <a href="https://doi.org/10.14778/2824032.2824076">The Dataflow Model: A Practical Approach to Balancing Correctness, Latency, and Cost in Massive-Scale, Unbounded, Out-of-Order Data Processing</a>. PVLDB 8(12): 1792–1803, 2015.</li>
+      <li>T. Akidau, R. J. Fernández-Moctezuma, R. Lax, D. Mills. <a href="https://doi.org/10.14778/3827998.3838710">The Dataflow Model Revisited</a>. PVLDB 19(12): 4953–4964, 2026.</li>
+      <li>T. Akidau, E. Begoli, S. Chernyak, F. Hueske, K. Knight, K. Knowles, D. Mills, D. Sotolongo. <a href="https://doi.org/10.14778/3476311.3476389">Watermarks in Stream Processing Systems: Semantics and Comparative Analysis of Apache Flink and Google Cloud Dataflow</a>. PVLDB 14(12): 3135–3147, 2021.</li>
+      <li>T. Akidau et al. MillWheel: Fault-Tolerant Stream Processing at Internet Scale. PVLDB 6(11): 1033–1044, 2013.</li>
+      <li>C. Chambers et al. <a href="https://research.google/pubs/flumejava-easy-efficient-data-parallel-pipelines/">FlumeJava: Easy, Efficient Data-Parallel Pipelines</a>. PLDI 2010: 363–375.</li>
+      <li>M. Armbrust et al. Structured Streaming: A Declarative API for Real-Time Applications in Apache Spark. SIGMOD 2018: 601–613.</li>
+      <li>T. Akidau, S. Chernyak, R. Lax. <a href="https://www.oreilly.com/library/view/streaming-systems/9781491983867/">Streaming Systems</a>. O’Reilly Media, 2018.</li>
+      <li>D. Sotolongo, D. Mills, T. Akidau et al. <a href="https://arxiv.org/abs/2504.10438">Streaming Democratized: Ease Across the Latency Spectrum with Delayed View Semantics and Snowflake Dynamic Tables</a>. SIGMOD Companion 2025.</li>
+      <li><a href="https://github.com/apache/beam">Apache Beam source code</a>, accessed November 2026.</li>
+      <li><a href="https://vldb.org/awards_10year.html">VLDB Test of Time Award</a>, <a href="https://portal.core.edu.au/conf-ranks/?search=VLDB&amp;by=all&amp;source=CORE2023">ICORE conference portal</a>, <a href="https://scholar.google.com/citations?view_op=top_venues&amp;hl=en&amp;vq=eng_databasesinformationsystems">Google Scholar Metrics</a>, <a href="https://www.semanticscholar.org/paper/fa63c3f53413ced7946623889c416e34a28676ea">Semantic Scholar</a>, all accessed November 2026.</li>
+    </ol>
+  </article><p><em>Originally published at <a href="https://vraj8.github.io/dataflow-model-blog/">vraj8.github.io/dataflow-model-blog</a>, with interactive charts.</em></p>
+</body>
+</html>
